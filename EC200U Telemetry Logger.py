@@ -1,135 +1,180 @@
 import serial
 import serial.tools.list_ports
 import time
+import random
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 # Configuration
 BAUDRATE = 115200
-TIMEOUT = 2  # Seconds to wait for a response
+TIMEOUT = 2
+SIMULATION_MODE = True  # Set to False when real hardware arrives
 
-def find_at_port():
-    """
-    Scans available COM/USB ports to find the one that responds to 'AT'.
-    Returns the port name (e.g., '/dev/ttyUSB2') or None.
-    """
-    print("Scanning for AT command port...")
-    ports = list(serial.tools.list_ports.comports())
-    
-    # Filter for likely candidates (USB to Serial adapters)
-    # On Raspberry Pi/Linux, these usually show up as ttyUSB*
-    candidates = [p.device for p in ports if "USB" in p.device or "COM" in p.device]
-    
-    for port in candidates:
-        try:
-            print(f"Testing {port}...", end="", flush=True)
-            with serial.Serial(port, BAUDRATE, timeout=1) as ser:
-                # Clear any garbage
-                ser.reset_input_buffer()
-                
-                # Send simple AT check
-                ser.write(b"AT\r\n")
-                
-                # Read lines for up to 1 second
-                start = time.time()
-                while (time.time() - start) < 1.0:
-                    line = ser.readline().decode('utf-8', errors='ignore').strip()
-                    if "OK" in line:
-                        print(" Found!")
+app = FastAPI(title="EC200U Cellular Monitor API")
+
+# Enable CORS so the browser can talk to this script
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class SerialManager:
+    def __init__(self):
+        self.ser = None
+        self.simulation_data = {
+            'signal_strength': 20,
+            'connected': False,
+            'port': None
+        }
+
+    def find_at_port(self):
+        """Scans for a port responding to AT commands."""
+        if SIMULATION_MODE:
+            # Simulate finding a port
+            simulated_ports = ["COM3", "/dev/ttyUSB0", "/dev/ttyACM0"]
+            print("🔍 Simulation: Scanning for ports...")
+            time.sleep(1)  # Simulate scan time
+            port = random.choice(simulated_ports)
+            print(f"✅ Simulation: Found {port}")
+            return port
+        
+        # Real hardware scanning
+        print("Scanning for AT command port...")
+        ports = list(serial.tools.list_ports.comports())
+        candidates = [p.device for p in ports if "USB" in p.device or "COM" in p.device]
+        
+        for port in candidates:
+            try:
+                print(f"Testing {port}...")
+                with serial.Serial(port, BAUDRATE, timeout=1) as temp_ser:
+                    temp_ser.reset_input_buffer()
+                    temp_ser.write(b"AT\r\n")
+                    time.sleep(0.5)
+                    resp = temp_ser.read_all().decode(errors='ignore')
+                    if "OK" in resp:
+                        print(f"✅ Found device on {port}")
                         return port
-            print(" No response.")
-        except (OSError, serial.SerialException):
-            print(" Busy/Error.")
-            pass
-            
-    return None
+            except Exception as e:
+                print(f"❌ {port} failed: {e}")
+                pass
+        return None
 
-def send_at_command(ser, cmd, timeout=TIMEOUT):
-    """
-    Sends an AT command and reads lines until 'OK' or 'ERROR'.
-    Returns the full response text.
-    """
-    try:
-        # Ensure command ends with CR+LF
-        full_cmd = cmd + "\r\n"
-        ser.write(full_cmd.encode())
-        
-        response_lines = []
-        start_time = time.time()
-        
-        while (time.time() - start_time) < timeout:
-            # readline() blocks based on the serial timeout setting
-            line_bytes = ser.readline()
-            
-            if not line_bytes:
-                continue
-                
-            line = line_bytes.decode('utf-8', errors='ignore').strip()
-            
-            # Skip empty lines and the echo of the command itself
-            if not line or line == cmd:
-                continue
-                
-            response_lines.append(line)
-            
-            # Check for standard terminators
-            if line == "OK":
-                return {"status": "success", "data": response_lines}
-            if "ERROR" in line:
-                return {"status": "error", "data": response_lines}
-                
-        return {"status": "timeout", "data": response_lines}
-        
-    except serial.SerialException as e:
-        return {"status": "comm_error", "data": [str(e)]}
+    def connect(self):
+        if SIMULATION_MODE:
+            print("🔌 Simulation: Connecting to virtual modem...")
+            time.sleep(1)  # Simulate connection time
+            self.simulation_data['connected'] = True
+            self.simulation_data['port'] = "COM3 (Simulation)"
+            return {
+                "status": "connected", 
+                "port": self.simulation_data['port'],
+                "message": "Connected to simulated EC200U modem"
+            }
 
-def main():
-    # 1. Auto-detect the port
-    port = find_at_port()
+        # Real connection logic
+        if self.ser and self.ser.is_open:
+            return {"status": "already_connected", "port": self.ser.port}
+
+        port = self.find_at_port()
+        if not port:
+            raise HTTPException(status_code=404, detail="No AT module found")
+
+        try:
+            self.ser = serial.Serial(port, BAUDRATE, timeout=TIMEOUT)
+            self.send_at("ATE0")  # Turn off echo
+            return {"status": "connected", "port": port}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    def disconnect(self):
+        if SIMULATION_MODE:
+            print("🔌 Simulation: Disconnecting...")
+            self.simulation_data['connected'] = False
+            return {"status": "disconnected", "message": "Simulated modem disconnected"}
+            
+        if self.ser and self.ser.is_open:
+            self.ser.close()
+            self.ser = None
+        return {"status": "disconnected"}
+
+    def send_at(self, cmd):
+        if SIMULATION_MODE:
+            # Simulate realistic responses
+            if cmd == "AT":
+                return {"status": "success", "data": ["OK"]}
+            elif cmd == "ATE0":
+                return {"status": "success", "data": ["OK"]}
+            elif cmd == "ATI":
+                return {"status": "success", "data": ["EC200U", "Revision: LTE_1.0", "OK"]}
+            elif cmd == "AT+CPIN?":
+                return {"status": "success", "data": ["+CPIN: READY", "OK"]}
+            elif cmd == "AT+CSQ":
+                # Simulate signal fluctuations
+                self.simulation_data['signal_strength'] = max(5, min(31, 
+                    self.simulation_data['signal_strength'] + random.randint(-2, 2)))
+                ber = random.randint(0, 2)
+                return {
+                    "status": "success", 
+                    "data": [f"+CSQ: {self.simulation_data['signal_strength']},{ber}", "OK"]
+                }
+            else:
+                return {"status": "error", "data": ["ERROR"]}
+
+        # Real command handling
+        if not self.ser or not self.ser.is_open:
+            raise HTTPException(status_code=400, detail="Device not connected")
+
+        try:
+            self.ser.reset_input_buffer()
+            full_cmd = cmd + "\r\n"
+            self.ser.write(full_cmd.encode())
+            
+            response_lines = []
+            start_time = time.time()
+            
+            while (time.time() - start_time) < TIMEOUT:
+                if self.ser.in_waiting:
+                    line = self.ser.readline().decode('utf-8', errors='ignore').strip()
+                    if not line or line == cmd:
+                        continue
+                    response_lines.append(line)
+                    if line == "OK":
+                        return {"status": "success", "data": response_lines}
+                    if "ERROR" in line:
+                        return {"status": "error", "data": response_lines}
+            return {"status": "timeout", "data": response_lines}
+            
+        except serial.SerialException as e:
+            self.disconnect()
+            raise HTTPException(status_code=500, detail=f"Communication Error: {str(e)}")
+
+serial_manager = SerialManager()
+
+# --- API Routes ---
+@app.post("/connect")
+def connect_device():
+    return serial_manager.connect()
+
+@app.post("/disconnect")
+def disconnect_device():
+    return serial_manager.disconnect()
+
+@app.get("/status")
+def get_full_status():
+    if SIMULATION_MODE and not serial_manager.simulation_data['connected']:
+        raise HTTPException(status_code=400, detail="Not connected")
     
-    if not port:
-        print("Error: Could not find a module responding to AT commands.")
-        print("Check your USB connection and power supply.")
-        return
-
-    print(f"Connecting to {port}...")
+    if not SIMULATION_MODE and (not serial_manager.ser or not serial_manager.ser.is_open):
+        raise HTTPException(status_code=400, detail="Not connected")
     
     try:
-        with serial.Serial(port, BAUDRATE, timeout=1) as ser:
-            # 2. Initialize
-            # Turn off echo (ATE0) so we don't get our own commands back
-            print("\n--- Initialization ---")
-            send_at_command(ser, "ATE0")
-            
-            # Check module info
-            resp = send_at_command(ser, "ATI")
-            print(f"Module Info: {resp['data']}")
-
-            # Check SIM status
-            resp = send_at_command(ser, "AT+CPIN?")
-            print(f"SIM Status: {resp['data']}")
-
-            # 3. Main Loop
-            print("\n--- Starting Signal Monitor (Ctrl+C to stop) ---")
-            while True:
-                # Query Signal Quality
-                # Response format is +CSQ: <rssi>,<ber>
-                result = send_at_command(ser, "AT+CSQ")
-                
-                if result['status'] == 'success':
-                    # Parse the specific line containing +CSQ
-                    csq_line = next((line for line in result['data'] if "+CSQ:" in line), None)
-                    if csq_line:
-                        print(f"Signal: {csq_line}")
-                    else:
-                        print("Signal: OK (No data)")
-                else:
-                    print(f"Warning: Command failed ({result['status']})")
-                
-                time.sleep(2)
-
-    except KeyboardInterrupt:
-        print("\nStopping...")
+        return {
+            "info": serial_manager.send_at("ATI"),
+            "sim": serial_manager.send_at("AT+CPIN?"),
+            "signal": serial_manager.send_at("AT+CSQ")
+        }
     except Exception as e:
-        print(f"\nUnexpected Error: {e}")
-
-if __name__ == "__main__":
-    main()
+        return {"error": str(e)}

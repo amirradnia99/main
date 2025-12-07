@@ -1,29 +1,78 @@
+
 # Quectel-EC200U-Signal-Monitor
 
-A Python-based telemetry and signal monitoring tool for Quectel EC200U and similar AT-command cellular modules. The utility automatically detects available USB/COM ports, identifies the correct AT interface, executes diagnostic AT commands, and continuously monitors signal quality parameters such as RSSI and BER using `AT+CSQ`.
+A modern, API-driven telemetry and signal monitoring tool for the Quectel EC200U cellular module and other AT-command-based devices.  
+The project has been fully refactored in **v2** to use a **FastAPI backend**, enabling a browser-based dashboard and optional hardware-free simulation mode.
+
+---
+
+## Why v2?
+
+v2 replaces the original CLI-based telemetry logger with a modern API architecture that supports:
+- **Web dashboards** for real-time monitoring
+- **Browser-based communication** through FastAPI
+- **Simulation without hardware** for testing and development
+
+This makes the project scalable and future-friendly for IoT, automation, and cloud integration.
+
+---
+
+## Overview
+
+The system provides:
+
+- A **FastAPI backend** that communicates with the EC200U through serial AT commands.
+- A **web dashboard** (HTML/JS/CSS) that visualizes signal quality, device status, and module information.
+- A **simulation mode** that allows development and testing without the physical modem.
 
 ---
 
 ## Features
 
-- Automatic detection of active AT command serial port  
-- Clean and structured AT command execution  
-- Device identification through `ATI`  
-- SIM card status check via `AT+CPIN?`  
-- Continuous signal-level monitoring (`AT+CSQ`)  
-- Graceful handling of timeouts and serial exceptions  
-- Fully extensible for additional AT commands and telemetry functions  
+### Backend (FastAPI – v2)
+- **Automatic AT port detection**  
+  Identifies available USB/COM interfaces and detects the AT command port.
+
+- **REST API for AT command diagnostics**  
+  `/connect`, `/disconnect`, `/status`.
+
+- **Simulation mode**  
+  Provides realistic modem behavior and fluctuating signal values when no hardware is available.
+
+- **Structured AT command execution**  
+  Consistent and safe execution of `AT`, `ATI`, `AT+CPIN?`, `AT+CSQ`, and more.
+
+- **Error-handled serial communication**  
+  Clean communication, automatic buffer resets, and graceful failure management.
+
+### Frontend (Web Dashboard)
+- Real-time signal display (RSSI, BER).
+- Automatic status refresh using API polling.
+- Displays SIM status, module information, and connection state.
+- Modern responsive UI.
+
+### New in v2
+- Complete transition from CLI script to **FastAPI web service**.
+- Dedicated `SerialManager` class for device handling.
+- CORS-enabled backend for browser communication.
+- Fully functional **hardware simulator**.
 
 ---
 
 ## Requirements
 
-- Python 3.8+
-- EC200U module (or any AT-compatible LTE/4G module)
-- Required Python library:
+- Python 3.8+  
+- EC200U module (optional with simulation mode enabled)
+- Required Python libraries:
 
 ```bash
-pip install pyserial
+pip install fastapi uvicorn pyserial
+```
+
+Or:
+
+```bash
+pip install -r requirements.txt
 ```
 
 ---
@@ -35,72 +84,78 @@ Clone the repository:
 ```bash
 git clone https://github.com/<your-username>/Quectel-EC200U-Signal-Monitor.git
 cd Quectel-EC200U-Signal-Monitor
+pip install -r requirements.txt
 ```
 
-Run the script:
+### Running the FastAPI Backend
+
+Start the backend API:
 
 ```bash
-python EC200U\ Telemetry\ Logger.py
+uvicorn main:app --reload
 ```
 
-(Ensure the filename matches your environment.)
+Replace `main` with your FastAPI filename.
 
----
+(Example: If your backend file is named `api_server.py`, then run `uvicorn api_server:app --reload`.)
 
-## Sample Output
+Backend will be available at:
 
-```text
-Scanning for AT command port...
-Testing /dev/ttyUSB2... Found!
-Connecting to /dev/ttyUSB2...
+[http://127.0.0.1:8000](http://127.0.0.1:8000)
 
---- Initialization ---
-Module Info: ['Quectel EC200U', 'Revision XYZ']
-SIM Status: ['+CPIN: READY']
+API documentation (Swagger UI):
 
---- Starting Signal Monitor (Ctrl+C to stop) ---
-Signal: +CSQ: 19,99
-Signal: +CSQ: 20,99
-...
+[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+
+### API Endpoints
+
+- **POST /connect**: Connects to the detected AT port or simulation environment.
+- **POST /disconnect**: Closes the current modem or simulated session.
+- **GET /status**: Returns:
+  - Module info (ATI)
+  - SIM status (AT+CPIN?)
+  - Signal quality (AT+CSQ)
+
+#### Example JSON response:
+
+```json
+{
+  "info": { "status": "success", "data": ["EC200U", "Revision: LTE_1.0", "OK"] },
+  "sim": { "status": "success", "data": ["+CPIN: READY", "OK"] },
+  "signal": { "status": "success", "data": ["+CSQ: 20,1", "OK"] }
+}
 ```
 
----
+### Simulation Mode
 
-## Extending the Tool
+If enabled in the backend code:
 
-### Network registration
-```bash
-AT+CREG?
-```
-
-### Operator information
-```bash
-AT+COPS?
-```
-
-### Programmatically send AT commands
 ```python
-send_at_command(ser, "AT+<COMMAND>")
+SIMULATION_MODE = True
 ```
 
-You can extend functionality by adding new AT commands or integrating logging, cloud upload, or LTE diagnostics.
+The software will simulate:
 
----
+- Port detection
+- Module info
+- SIM state
+- Signal strength variations
+- Response timing
 
-## Troubleshooting
+Useful for front-end work or development without hardware.
 
-**No AT port detected**  
-- Ensure the EC200U module is powered.  
-- On Linux, confirm the device appears under `/dev/ttyUSB*`.  
-- On Windows, confirm it appears under `COMx`.
+### Frontend Dashboard
 
-**Timeout or no response**  
-- Check cable quality.  
-- Try increasing the serial timeout.  
+The included web dashboard connects to the FastAPI backend and displays:
 
-**AT commands return ERROR**  
-- Ensure SIM is inserted and unlocked.  
-- Verify antenna is connected.  
+- RSSI and BER (via AT+CSQ)
+- Module info
+- SIM card status
+- Connection state
+
+Hosted locally by simply opening `index.html` in a browser.
+
+![Dashboard Preview](images/screenshot.png)
 
 ---
 
@@ -108,10 +163,37 @@ You can extend functionality by adding new AT commands or integrating logging, c
 
 | File                          | Purpose                                                             |
 |-------------------------------|---------------------------------------------------------------------|
-| `EC200U Telemetry Logger.py` | Main script for port detection, AT communication, and monitoring.   |
+| `main.py`                     | FastAPI backend, API routes, SerialManager integration              |
+| `index.html`                  | Frontend dashboard UI                                              |
+| `style.css`                   | Dashboard styling                                                   |
+| `script.js`                   | Frontend logic and API communication                               |
+| `requirements.txt`            | Python dependencies                                                 |
+
+---
+
+## Troubleshooting
+
+### No AT port detected
+- Ensure the EC200U module is powered and visible (`/dev/ttyUSB*` or `COMx`).
+
+### CORS or browser errors
+- Verify the backend is running and accessible.
+- Confirm correct URL in `script.js`.
+
+### Unexpected timeouts
+- Replace USB cable.
+- Increase serial timeout in `SerialManager`.
 
 ---
 
 ## License
 
-This project is distributed under the MIT License.
+Distributed under the MIT License.
+
+---
+
+## Contributors
+
+- **Backend Development**: Amir Radnia – FastAPI backend, SerialManager, AT command handling
+- **Frontend Development**: Reza Faridi – Dashboard UI, API integration
+- **Systems Integration**: Amir Radnia & Reza Faridi
