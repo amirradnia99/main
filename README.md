@@ -160,7 +160,7 @@ Hosted locally by simply opening `index.html` in a browser.
 git clone --recursive https://github.com/amirradnia99/Quectel-EC200U-Signal-Monitor.git
 ```
 
-Alternatively, you can clone the frontend repository separately by following the instructions here: **[EC200U Cellular Dashboard](https://github.com/amirradnia99/ARMEDIA)**.
+Alternatively, you can clone the frontend repository separately by following the instructions here: **[Quectel-Monitor-Frontend](https://github.com/amirradnia99/Quectel-Monitor-Frontend)**.
 
 ---
 
